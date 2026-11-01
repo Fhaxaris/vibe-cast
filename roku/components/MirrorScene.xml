@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="MirrorScene" extends="Scene">
+    <interface>
+        <field id="streamUrl" type="string" onChange="onStreamUrl" alwaysNotify="true" />
+    </interface>
+
+    <script type="text/brightscript" uri="pkg:/components/MirrorScene.brs" />
+
+    <children>
+        <Rectangle id="bg" width="1920" height="1080" color="0x0B0D12FF" />
+        <Video id="video" width="1920" height="1080" translation="[0,0]" enableUI="false" />
+        <Group id="overlay">
+            <Label id="title" text="Phone Mirror" width="1920" height="80"
+                translation="[0,420]" horizAlign="center" color="0xFFFFFFFF">
+                <Font role="font" uri="font:BoldSystemFontFile" size="56" />
+            </Label>
+            <Label id="status" text="Open Roku Mirror on your phone and tap Start."
+                width="1920" height="60" translation="[0,520]" horizAlign="center"
+                color="0x9AA3B2FF">
+                <Font role="font" uri="font:SystemFontFile" size="34" />
+            </Label>
+        </Group>
+        <Timer id="retry" duration="2" repeat="false" />
+    </children>
+</component>

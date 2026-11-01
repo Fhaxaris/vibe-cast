@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build the Android app
+        run: gradle -p android assembleRelease --no-daemon
+
+      - name: Package files
+        run: |
+          mkdir dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/RokuMirror.apk
+          (cd roku && zip -r -X ../dist/roku-mirror-receiver.zip manifest source components images)
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roku-mirror
+          path: dist/*
+
+      - name: Publish as the "latest" release (direct download links)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/RokuMirror.apk dist/roku-mirror-receiver.zip \
+            --title "Roku Mirror (latest build)" \
+            --notes "Install RokuMirror.apk on your phone and sideload roku-mirror-receiver.zip on your Roku. See README for steps." \
+            --target "${{ github.sha }}"
