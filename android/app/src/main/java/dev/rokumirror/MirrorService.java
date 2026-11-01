@@ -118,11 +118,13 @@ public class MirrorService extends Service {
             }
         }, main);
 
-        // Size the stream to the screen's shape, small enough for smooth Wi-Fi streaming.
+        // Always stream a TV-shaped 16:9 frame. Android fits the phone's screen inside it
+        // in whatever orientation the phone is in, so landscape fills the TV and portrait
+        // gets side bars, and rotating mid-stream just works.
         DisplayMetrics dm = new DisplayMetrics();
         Display d = getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
         d.getRealMetrics(dm);
-        int[] size = fit(dm.widthPixels, dm.heightPixels, 1280, 1080);
+        int[] size = {1920, 1080};
 
         // Set up audio first: the stream only advertises a sound track if we can fill it.
         String soundNote;
@@ -191,7 +193,7 @@ public class MirrorService extends Service {
         MediaFormat fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h);
         fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-        fmt.setInteger(MediaFormat.KEY_BIT_RATE, 5_000_000);
+        fmt.setInteger(MediaFormat.KEY_BIT_RATE, w >= 1920 ? 8_000_000 : 5_000_000);
         fmt.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
         fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
         fmt.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0);

@@ -54,7 +54,8 @@ must be **Default** or **Permissive** (not Disabled/Limited), so the phone can o
   Your phone keeps playing sound too, so turn its volume down if you hear an echo.
 - **Netflix, Disney+, banking apps etc. show black.** Those apps block screen capture on
   purpose. Use their own Roku channels instead.
-- **Rotation:** if you rotate the phone, tap Start again so the picture fits the new shape.
+- **Rotation just works:** the stream is always 1920×1080, so landscape fills the TV and
+  portrait shows centered with bars on the sides.
 - **Can't find the Roku / won't connect:** be on the same Wi-Fi (not a guest network) and
   turn off any VPN, or allow LAN access in it — the Roku has to reach the phone directly.
 - Uses port 8765 on the phone (falls back to 8766–8774 if busy).
