@@ -44,6 +44,16 @@ must be **Default** or **Permissive** (not Disabled/Limited), so the phone can o
    and allow screen capture.
 3. Stop from the app or the notification.
 
+## No-channel mode (experimental)
+
+Turn on **No-channel mode** in the app to skip the receiver channel and use the
+Roku's built-in "Play on Roku" player instead (no developer mode needed). Not every
+Roku accepts a live stream this way; the app tells you within ~25 seconds whether the
+TV started playing. If it didn't, turn the switch off and use the channel.
+
+Why not the Roku's own "Screen mirroring" menu? That is Miracast, and Android only lets
+system software (not installable apps) advertise itself as a Miracast sender.
+
 ## Good to know
 
 - **Delay of about 3–5 seconds.** Roku only plays HLS-style streams, which buffer.

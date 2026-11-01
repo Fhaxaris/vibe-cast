@@ -18,6 +18,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -33,6 +34,7 @@ public class MainActivity extends Activity {
     private TextView statusView;
     private LinearLayout deviceList;
     private Button scanButton;
+    private Switch builtInSwitch;
 
     private final Runnable statusPoller = new Runnable() {
         @Override
@@ -110,6 +112,15 @@ public class MainActivity extends Activity {
         ipField.setText(prefs.getString("roku", ""));
         col.addView(ipField);
 
+        builtInSwitch = new Switch(this);
+        builtInSwitch.setText("No-channel mode (experimental): use the Roku's built-in "
+                + "player instead of the Phone Mirror channel");
+        builtInSwitch.setChecked(prefs.getBoolean("builtIn", false));
+        builtInSwitch.setPadding(0, dp(12), 0, dp(12));
+        builtInSwitch.setOnCheckedChangeListener(
+                (b, on) -> prefs.edit().putBoolean("builtIn", on).apply());
+        col.addView(builtInSwitch);
+
         Button start = new Button(this);
         start.setText("Start mirroring");
         start.setOnClickListener(v -> startMirroring());
@@ -184,7 +195,8 @@ public class MainActivity extends Activity {
         Intent svc = new Intent(this, MirrorService.class)
                 .putExtra(MirrorService.EXTRA_CODE, resultCode)
                 .putExtra(MirrorService.EXTRA_DATA, data)
-                .putExtra(MirrorService.EXTRA_ROKU, ipField.getText().toString().trim());
+                .putExtra(MirrorService.EXTRA_ROKU, ipField.getText().toString().trim())
+                .putExtra(MirrorService.EXTRA_BUILT_IN, builtInSwitch.isChecked());
         MirrorService.status = "Starting…";
         startForegroundService(svc);
     }

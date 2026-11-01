@@ -36,6 +36,7 @@ public class MirrorService extends Service {
     public static final String EXTRA_CODE = "code";
     public static final String EXTRA_DATA = "data";
     public static final String EXTRA_ROKU = "roku";
+    public static final String EXTRA_BUILT_IN = "builtIn";
 
     /** Read by the activity to show progress. */
     public static volatile String status = "Not mirroring";
@@ -57,6 +58,7 @@ public class MirrorService extends Service {
     private String rokuIp;
     private AudioCapture audio;
     private boolean audioAllowed;
+    private boolean builtInPlayer;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -92,6 +94,7 @@ public class MirrorService extends Service {
                 ? intent.getParcelableExtra(EXTRA_DATA, Intent.class)
                 : intent.getParcelableExtra(EXTRA_DATA);
         rokuIp = intent.getStringExtra(EXTRA_ROKU);
+        builtInPlayer = intent.getBooleanExtra(EXTRA_BUILT_IN, false);
 
         try {
             startMirroring(code, data);
@@ -164,6 +167,8 @@ public class MirrorService extends Service {
 
         final String roku = rokuIp;
         final String sound = soundNote;
+        final boolean builtIn = builtInPlayer;
+        final MiniHttpServer srv = server;
         new Thread(() -> {
             String phoneIp = RokuClient.localAddressToward(roku);
             if (phoneIp == null) {
@@ -172,10 +177,37 @@ public class MirrorService extends Service {
             }
             String url = "http://" + phoneIp + ":" + port + "/live.m3u8";
             try {
-                RokuClient.launchReceiver(roku, url);
-                status = "Mirroring to " + roku + " (" + size_str() + ", " + sound + ")";
+                if (builtIn) {
+                    RokuClient.launchBuiltInPlayer(roku, url);
+                } else {
+                    RokuClient.launchReceiver(roku, url);
+                }
             } catch (Exception e) {
                 status = e.getMessage();
+                return;
+            }
+
+            // Confirm the TV is actually pulling the stream.
+            String mode = builtIn ? "Roku's built-in player" : "the Phone Mirror channel";
+            status = "Sent to " + mode + ". Waiting for the TV to start playing…";
+            long deadline = System.currentTimeMillis() + 25_000;
+            while (running && System.currentTimeMillis() < deadline) {
+                if (srv.segmentsServed() > 0) {
+                    status = "Mirroring to " + roku + " via " + mode
+                            + " (" + size_str() + ", " + sound + ")";
+                    return;
+                }
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+            if (running) {
+                status = builtIn
+                        ? "The built-in player didn't pick up the stream, so no-channel mode "
+                          + "doesn't work on this Roku. Turn it off to use the Phone Mirror channel."
+                        : "The TV never started playing. Is the Phone Mirror channel installed?";
             }
         }, "roku-launch").start();
     }

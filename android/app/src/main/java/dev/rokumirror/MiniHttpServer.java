@@ -16,6 +16,12 @@ public final class MiniHttpServer {
     private final ExecutorService pool = Executors.newCachedThreadPool();
     private ServerSocket socket;
     private volatile boolean running;
+    private volatile int segmentsServed;
+
+    /** How many video segments the TV has downloaded so far. */
+    public int segmentsServed() {
+        return segmentsServed;
+    }
 
     public MiniHttpServer(HlsSegmenter segmenter) {
         this.segmenter = segmenter;
@@ -100,6 +106,7 @@ public final class MiniHttpServer {
                     respond(out, 404, "text/plain", "gone".getBytes(StandardCharsets.US_ASCII), head);
                 } else {
                     respond(out, 200, "video/mp2t", data, head);
+                    if (!head) segmentsServed++;
                 }
             } else {
                 respond(out, 404, "text/plain", "not found".getBytes(StandardCharsets.US_ASCII), head);

@@ -112,6 +112,35 @@ public final class RokuClient {
         }
     }
 
+    /**
+     * Experimental: hands the stream to Roku's built-in "Play on Roku" player (channel
+     * 15985), which every Roku has, so no sideloaded channel is needed.
+     */
+    public static void launchBuiltInPlayer(String rokuIp, String streamUrl) throws IOException {
+        String q = "t=v&u=" + URLEncoder.encode(streamUrl, "UTF-8")
+                + "&k=(null)&videoName=" + URLEncoder.encode("Phone screen", "UTF-8")
+                + "&videoFormat=hls";
+        int code;
+        try {
+            code = post("http://" + rokuIp + ":8060/input/15985?" + q);
+            if (code < 200 || code >= 300) {
+                // Some models only accept it as a launch.
+                code = post("http://" + rokuIp + ":8060/launch/15985?" + q);
+            }
+        } catch (IOException e) {
+            throw new IOException("Couldn't reach the Roku at " + rokuIp
+                    + ". Check the IP and that both are on the same Wi-Fi.");
+        }
+        if (code == 403) {
+            throw new IOException("The Roku refused control. On the Roku, set Settings > System > "
+                    + "Advanced system settings > Control by mobile apps to Default or Permissive.");
+        }
+        if (code < 200 || code >= 300) {
+            throw new IOException("The Roku's built-in player answered HTTP " + code
+                    + ". Turn off no-channel mode to use the receiver channel.");
+        }
+    }
+
     /** Sends a remote-control key such as "Home" or "Back". Errors are ignored. */
     public static void keypress(String rokuIp, String key) {
         try {
