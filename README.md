@@ -48,7 +48,10 @@ must be **Default** or **Permissive** (not Disabled/Limited), so the phone can o
 
 - **Delay of about 3–5 seconds.** Roku only plays HLS-style streams, which buffer.
   Great for videos and photos, not for games.
-- **No sound yet.** This version mirrors video only. (Audio capture is a possible v2.)
+- **Sound:** allow the audio permission when asked. Android calls it "record audio", but the
+  app only captures what other apps play, not the microphone. Some apps opt out of having
+  their sound captured; their audio will be missing. The status line says whether sound is on.
+  Your phone keeps playing sound too, so turn its volume down if you hear an echo.
 - **Netflix, Disney+, banking apps etc. show black.** Those apps block screen capture on
   purpose. Use their own Roku channels instead.
 - **Rotation:** if you rotate the phone, tap Start again so the picture fits the new shape.

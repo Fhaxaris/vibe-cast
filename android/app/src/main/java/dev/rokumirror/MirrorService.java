@@ -1,11 +1,13 @@
 package dev.rokumirror;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.drawable.Icon;
 import android.hardware.display.DisplayManager;
@@ -53,6 +55,8 @@ public class MirrorService extends Service {
     private Thread drainThread;
     private volatile boolean stopping;
     private String rokuIp;
+    private AudioCapture audio;
+    private boolean audioAllowed;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -69,8 +73,19 @@ public class MirrorService extends Service {
         if (running) stopMirroring(false);
 
         // Must be in the foreground before asking for the projection (Android 14+).
-        startForeground(NOTIFICATION_ID, buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        audioAllowed = checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+        int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+        if (audioAllowed && Build.VERSION.SDK_INT >= 30) {
+            types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+        }
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification(), types);
+        } catch (RuntimeException e) {
+            audioAllowed = false;
+            startForeground(NOTIFICATION_ID, buildNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        }
 
         int code = intent.getIntExtra(EXTRA_CODE, 0);
         Intent data = Build.VERSION.SDK_INT >= 33
@@ -109,7 +124,22 @@ public class MirrorService extends Service {
         d.getRealMetrics(dm);
         int[] size = fit(dm.widthPixels, dm.heightPixels, 1280, 1080);
 
-        segmenter = new HlsSegmenter();
+        // Set up audio first: the stream only advertises a sound track if we can fill it.
+        String soundNote;
+        if (!audioAllowed) {
+            soundNote = "no sound: audio permission off";
+        } else {
+            try {
+                audio = new AudioCapture(projection);
+                soundNote = "with sound";
+            } catch (Exception e) {
+                audio = null;
+                soundNote = "no sound: " + e.getMessage();
+            }
+        }
+        segmenter = audio != null
+                ? new HlsSegmenter(AudioCapture.SAMPLE_RATE, AudioCapture.CHANNELS)
+                : new HlsSegmenter();
         try {
             startEncoder(size[0], size[1]);
         } catch (Exception first) {
@@ -123,6 +153,7 @@ public class MirrorService extends Service {
 
         drainThread = new Thread(this::drainLoop, "mirror-encoder");
         drainThread.start();
+        if (audio != null) audio.start(segmenter);
 
         server = new MiniHttpServer(segmenter);
         int port = server.start(8765);
@@ -130,6 +161,7 @@ public class MirrorService extends Service {
         status = "Starting stream…";
 
         final String roku = rokuIp;
+        final String sound = soundNote;
         new Thread(() -> {
             String phoneIp = RokuClient.localAddressToward(roku);
             if (phoneIp == null) {
@@ -139,7 +171,7 @@ public class MirrorService extends Service {
             String url = "http://" + phoneIp + ":" + port + "/live.m3u8";
             try {
                 RokuClient.launchReceiver(roku, url);
-                status = "Mirroring to " + roku + " (" + size_str() + ")";
+                status = "Mirroring to " + roku + " (" + size_str() + ", " + sound + ")";
             } catch (Exception e) {
                 status = e.getMessage();
             }
@@ -229,6 +261,10 @@ public class MirrorService extends Service {
             } catch (InterruptedException ignored) {
             }
             drainThread = null;
+        }
+        if (audio != null) {
+            audio.stop();
+            audio = null;
         }
         releaseEncoder();
         if (projection != null) {

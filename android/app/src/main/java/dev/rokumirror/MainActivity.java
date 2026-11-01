@@ -21,6 +21,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends Activity {
@@ -47,11 +48,17 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("mirror", MODE_PRIVATE);
         setContentView(buildUi());
 
+        List<String> wanted = new ArrayList<>();
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            wanted.add(Manifest.permission.RECORD_AUDIO);
+        }
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2);
+            wanted.add(Manifest.permission.POST_NOTIFICATIONS);
         }
+        if (!wanted.isEmpty()) requestPermissions(wanted.toArray(new String[0]), 2);
         if (ipField.getText().length() == 0) scan();
     }
 
@@ -81,7 +88,9 @@ public class MainActivity extends Activity {
         TextView hint = new TextView(this);
         hint.setText("Pick your Roku, then tap Start. The Roku needs the Phone Mirror "
                 + "receiver channel installed. Expect a delay of a few seconds, so it's best "
-                + "for videos and photos rather than games.");
+                + "for videos and photos rather than games.\n\n"
+                + "For sound, allow the audio permission. Android calls it \"record audio\", "
+                + "but the app only captures what other apps play, not your microphone.");
         hint.setPadding(0, dp(8), 0, dp(16));
         col.addView(hint);
 

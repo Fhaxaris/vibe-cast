@@ -2,19 +2,24 @@ package dev.rokumirror;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * Turns H.264 access units (Annex-B, as produced by Android's MediaCodec) into a
- * live HLS stream: a rolling playlist plus short MPEG-TS segments held in memory.
- * Pure Java, no Android dependencies, so it can be tested on any JVM.
+ * Turns H.264 access units (Annex-B, as produced by Android's MediaCodec) and raw AAC
+ * frames into a live HLS stream: a rolling playlist plus short MPEG-TS segments held in
+ * memory. Pure Java, no Android dependencies, so it can be tested on any JVM.
+ *
+ * Video and audio timestamps must share one clock (on Android both come from
+ * System.nanoTime()/1000). Segments are cut on video keyframes.
  */
 public final class HlsSegmenter {
     private static final int PAT_PID = 0x0000;
     private static final int PMT_PID = 0x1000;
     private static final int VIDEO_PID = 0x0100;
+    private static final int AUDIO_PID = 0x0101;
 
     private static final long MIN_SEGMENT_US = 900_000;   // cut at the first keyframe after ~0.9 s
     private static final int KEEP_SEGMENTS = 12;          // held in memory
@@ -22,15 +27,21 @@ public final class HlsSegmenter {
 
     private static final byte[] AUD = {0, 0, 0, 1, 0x09, (byte) 0xF0};
 
+    private static final int[] AAC_RATES = {
+            96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350};
+
     private final Object lock = new Object();
     private final LinkedHashMap<Integer, Segment> segments = new LinkedHashMap<>();
+    private final boolean withAudio;
+    private final int audioRateIndex;
+    private final int audioChannels;
 
     private byte[] codecConfig;
     private ByteArrayOutputStream current;
     private long currentStartUs = -1;
     private long firstPtsUs = -1;
     private int nextSeq = 0;
-    private int ccPat, ccPmt, ccVideo;
+    private int ccPat, ccPmt, ccVideo, ccAudio;
     private boolean closed;
 
     private static final class Segment {
@@ -43,6 +54,25 @@ public final class HlsSegmenter {
             this.data = data;
             this.duration = duration;
         }
+    }
+
+    /** Video-only stream. */
+    public HlsSegmenter() {
+        this(0, 0);
+    }
+
+    /**
+     * Video plus an AAC-LC audio track at the given sample rate and channel count.
+     * Pass 0 for both to disable audio.
+     */
+    public HlsSegmenter(int audioSampleRate, int audioChannels) {
+        this.withAudio = audioSampleRate > 0 && audioChannels > 0;
+        int idx = 3;
+        for (int i = 0; i < AAC_RATES.length; i++) {
+            if (AAC_RATES[i] == audioSampleRate) idx = i;
+        }
+        this.audioRateIndex = idx;
+        this.audioChannels = audioChannels;
     }
 
     /** SPS + PPS, Annex-B with start codes. Re-sent before every keyframe. */
@@ -69,7 +99,16 @@ public final class HlsSegmenter {
                 startSegment(ptsUs);
             }
             if (firstPtsUs < 0) firstPtsUs = ptsUs;
-            writeAccessUnit(annexB, Math.max(0, ptsUs - firstPtsUs), keyFrame);
+            writeVideo(annexB, Math.max(0, ptsUs - firstPtsUs), keyFrame);
+        }
+    }
+
+    /** One raw AAC frame (no ADTS header), as MediaCodec's AAC encoder outputs it. */
+    public void addAudio(byte[] aac, long ptsUs) {
+        synchronized (lock) {
+            if (closed || !withAudio || current == null || firstPtsUs < 0) return;
+            if (ptsUs < firstPtsUs) return;         // from before the video started
+            writeAudio(aac, ptsUs - firstPtsUs);
         }
     }
 
@@ -139,24 +178,33 @@ public final class HlsSegmenter {
         lock.notifyAll();
     }
 
-    private void writeAccessUnit(byte[] data, long relUs, boolean key) {
-        long pts = relUs * 9 / 100 + 126_000;      // 90 kHz clock, 1.4 s offset
-        long pcr = pts - 63_000;                   // decoder clock 0.7 s behind PTS
+    private static long toPts(long relUs) {
+        return relUs * 9 / 100 + 126_000;          // 90 kHz clock, 1.4 s offset
+    }
 
-        byte[] config = key ? codecConfig : null;
-        int esLen = AUD.length + (config != null ? config.length : 0) + data.length;
-        byte[] pes = new byte[14 + esLen];
-        int p = 0;
-        pes[p++] = 0; pes[p++] = 0; pes[p++] = 1; pes[p++] = (byte) 0xE0;   // video stream
-        pes[p++] = 0; pes[p++] = 0;                                       // unbounded length
-        pes[p++] = (byte) 0x80;                                           // marker bits
-        pes[p++] = (byte) 0x80;                                           // PTS only
-        pes[p++] = 5;                                                     // header data length
+    private static int writePtsHeader(byte[] pes, int p, int streamId, int pesLength, long pts) {
+        pes[p++] = 0; pes[p++] = 0; pes[p++] = 1; pes[p++] = (byte) streamId;
+        pes[p++] = (byte) (pesLength >> 8);
+        pes[p++] = (byte) pesLength;
+        pes[p++] = (byte) 0x80;                     // marker bits
+        pes[p++] = (byte) 0x80;                     // PTS only
+        pes[p++] = 5;                               // header data length
         pes[p++] = (byte) (0x21 | ((pts >> 29) & 0x0E));
         pes[p++] = (byte) (pts >> 22);
         pes[p++] = (byte) (((pts >> 14) & 0xFE) | 1);
         pes[p++] = (byte) (pts >> 7);
         pes[p++] = (byte) (((pts << 1) & 0xFE) | 1);
+        return p;
+    }
+
+    private void writeVideo(byte[] data, long relUs, boolean key) {
+        long pts = toPts(relUs);
+        long pcr = pts - 63_000;                    // decoder clock 0.7 s behind PTS
+
+        byte[] config = key ? codecConfig : null;
+        int esLen = AUD.length + (config != null ? config.length : 0) + data.length;
+        byte[] pes = new byte[14 + esLen];
+        int p = writePtsHeader(pes, 0, 0xE0, 0, pts);   // 0 = unbounded length (video)
         System.arraycopy(AUD, 0, pes, p, AUD.length);
         p += AUD.length;
         if (config != null) {
@@ -165,20 +213,41 @@ public final class HlsSegmenter {
         }
         System.arraycopy(data, 0, pes, p, data.length);
 
-        writePes(pes, pcr, key);
+        writePes(VIDEO_PID, pes, pcr, key);
     }
 
-    private void writePes(byte[] pes, long pcr, boolean key) {
+    private void writeAudio(byte[] aac, long relUs) {
+        long pts = toPts(relUs);
+        int frameLen = 7 + aac.length;
+        byte[] pes = new byte[14 + frameLen];
+        int p = writePtsHeader(pes, 0, 0xC0, 8 + frameLen, pts);
+
+        // ADTS header: AAC-LC, no CRC.
+        pes[p++] = (byte) 0xFF;
+        pes[p++] = (byte) 0xF1;
+        pes[p++] = (byte) ((1 << 6) | (audioRateIndex << 2) | ((audioChannels >> 2) & 1));
+        pes[p++] = (byte) (((audioChannels & 3) << 6) | ((frameLen >> 11) & 3));
+        pes[p++] = (byte) (frameLen >> 3);
+        pes[p++] = (byte) (((frameLen & 7) << 5) | 0x1F);
+        pes[p++] = (byte) 0xFC;
+        System.arraycopy(aac, 0, pes, p, aac.length);
+
+        writePes(AUDIO_PID, pes, -1, true);
+    }
+
+    /** Splits a PES packet into 188-byte TS packets. pcr < 0 means no PCR. */
+    private void writePes(int pid, byte[] pes, long pcr, boolean randomAccess) {
         int pos = 0;
         boolean first = true;
         byte[] pkt = new byte[188];
         while (pos < pes.length) {
             int remaining = pes.length - pos;
+            boolean withPcr = first && pcr >= 0;
+            boolean withFlags = first;              // first packet carries flags (and PCR)
 
             // Adaptation field content (excluding its length byte).
-            int afContent = 0;
-            if (first) afContent = 7;              // flags + PCR
-            int afTotal = first ? 1 + afContent : 0;
+            int afContent = withFlags ? (withPcr ? 7 : 1) : 0;
+            int afTotal = withFlags ? 1 + afContent : 0;
             int space = 184 - afTotal;
             if (remaining < space) {
                 // Pad with stuffing so the packet is exactly 188 bytes.
@@ -187,20 +256,21 @@ public final class HlsSegmenter {
                 space = remaining;
             }
 
+            int cc = pid == VIDEO_PID ? ccVideo++ : ccAudio++;
             pkt[0] = 0x47;
-            pkt[1] = (byte) ((first ? 0x40 : 0) | ((VIDEO_PID >> 8) & 0x1F));
-            pkt[2] = (byte) VIDEO_PID;
-            pkt[3] = (byte) ((afTotal > 0 ? 0x30 : 0x10) | (ccVideo++ & 0x0F));
+            pkt[1] = (byte) ((first ? 0x40 : 0) | ((pid >> 8) & 0x1F));
+            pkt[2] = (byte) pid;
+            pkt[3] = (byte) ((afTotal > 0 ? 0x30 : 0x10) | (cc & 0x0F));
             int i = 4;
             if (afTotal > 0) {
                 pkt[i++] = (byte) afContent;
                 if (afContent > 0) {
                     int flags = 0;
-                    if (first) flags |= 0x10;                  // PCR present
-                    if (first && key) flags |= 0x40;           // random access point
+                    if (withPcr) flags |= 0x10;                   // PCR present
+                    if (first && randomAccess) flags |= 0x40;     // random access point
                     pkt[i++] = (byte) flags;
                     int written = 1;
-                    if (first) {
+                    if (withPcr) {
                         pkt[i++] = (byte) (pcr >> 25);
                         pkt[i++] = (byte) (pcr >> 17);
                         pkt[i++] = (byte) (pcr >> 9);
@@ -224,7 +294,7 @@ public final class HlsSegmenter {
 
     private void writePsi(int pid, byte[] section, int cc) {
         byte[] pkt = new byte[188];
-        java.util.Arrays.fill(pkt, (byte) 0xFF);
+        Arrays.fill(pkt, (byte) 0xFF);
         pkt[0] = 0x47;
         pkt[1] = (byte) (0x40 | ((pid >> 8) & 0x1F));
         pkt[2] = (byte) pid;
@@ -242,12 +312,27 @@ public final class HlsSegmenter {
         return withCrc(s);
     }
 
-    private static byte[] pmt() {
-        byte[] s = {
-                0x02, (byte) 0xB0, 0x12, 0x00, 0x01, (byte) 0xC1, 0x00, 0x00,
-                (byte) (0xE0 | (VIDEO_PID >> 8)), (byte) VIDEO_PID, (byte) 0xF0, 0x00,
+    private byte[] pmt() {
+        byte[] video = {
                 0x1B, (byte) (0xE0 | (VIDEO_PID >> 8)), (byte) VIDEO_PID, (byte) 0xF0, 0x00
         };
+        byte[] audio = {
+                0x0F, (byte) (0xE0 | (AUDIO_PID >> 8)), (byte) AUDIO_PID, (byte) 0xF0, 0x00
+        };
+        int streams = video.length + (withAudio ? audio.length : 0);
+        int sectionLength = 9 + streams + 4;        // header after length field + streams + CRC
+        byte[] s = new byte[3 + 9 + streams];
+        int p = 0;
+        s[p++] = 0x02;
+        s[p++] = (byte) (0xB0 | (sectionLength >> 8));
+        s[p++] = (byte) sectionLength;
+        s[p++] = 0x00; s[p++] = 0x01;               // program number 1
+        s[p++] = (byte) 0xC1; s[p++] = 0x00; s[p++] = 0x00;
+        s[p++] = (byte) (0xE0 | (VIDEO_PID >> 8)); s[p++] = (byte) VIDEO_PID;   // PCR PID
+        s[p++] = (byte) 0xF0; s[p++] = 0x00;        // no program info
+        System.arraycopy(video, 0, s, p, video.length);
+        p += video.length;
+        if (withAudio) System.arraycopy(audio, 0, s, p, audio.length);
         return withCrc(s);
     }
 
